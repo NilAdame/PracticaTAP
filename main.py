@@ -7,6 +7,6 @@ import time
 
 global mc
 mc = Minecraft.create('localhost', 25565)
-while True:
-    for event in mc.events.pollChatPosts():
+
+for event in mc.events.pollChatPosts():
         print(event)
