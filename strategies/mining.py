@@ -36,6 +36,7 @@ class MinerBot(BaseAgent):
         
         # Inicialitzar les classes d'estratègia un cop es defineixin (es pot fer de manera lazy)
         # self.strategy_executor = self._load_strategy(self.current_strategy) 
+        self.strategy_executor = GridSearch(self.agent_id, self.mc, self.logger) 
 
 
     # --- Mètode Auxiliar per a Estratègia (Usat per /miner set strategy) ---
