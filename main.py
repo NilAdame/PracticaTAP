@@ -1,177 +1,148 @@
-# --- main.py (VERSIÓ CORREGIDA) ---
-
 import asyncio
 import logging
-from mcpi.minecraft import Minecraft
-from mcpi import block
+import importlib
+import pkgutil
 import time
 
-# Importa els teus mòduls
-from agents.MinerBot import MinerBot
-from core.messageBus import MessageBus
-from BaseAgent import State 
-# Assumeixo que tens un fitxer BaseAgent.py amb l'Enum State
+from mcpi.minecraft import Minecraft
 
-# Configuració del Logger
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Importem mòduls del projecte
+import agents 
+from missatges.messageBus import MessageBus
+from agents.BaseAgent import BaseAgent
+import sys
+import os
+
+# Afegeix la carpeta actual al path per a que trobi 'agents', 'strategies', etc.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# 1. Configuració de Logging [cite: 19, 214]
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
 logger = logging.getLogger("MAIN")
 
+TARGET_MINER_ID = "MinerBot-1"
 
-# --- DEFINICIÓ DE L'ID D'AGENT (ÚS CONSISTENT) ---
-# Si l'ID al bus és 'MinerBot_A', l'encaminador ha de retornar 'MinerBot_A'.
-TARGET_MINER_ID = "MinerBot_A"
-
-
-# --- 1. Funcions de Connexió ---
-
-def connect_to_minecraft():
-    """Estableix la connexió a la instància de Minecraft."""
-    # ... (la teva lògica de connexió, sense canvis)
-    try:
-        mc = Minecraft.create()
-        mc.postToChat("Multi-Agent System Activated!")
-        logger.info("Connexió a Minecraft establerta.")
-        return mc
-    except Exception as e:
-        logger.error(f"ERROR: No es pot connectar al servidor de Minecraft. {e}")
-        return None
-
-# El logger ha de ser el logger principal si no es defineix un nou.
-parser_logger = logging.getLogger("PARSER") 
-
-# --- 2. Parser de Comandes (Versió ÚNICA i RobustA) ---
+# --- 2. Parser de Comandes (Lògica de Xat) [cite: 152, 153] ---
 
 def parse_command(chat_message: str):
-    """
-    Analitza el text cru d'una comanda del xat i extreu l'Agent Destí, 
-    la Comanda d'Acció i els Paràmetres.
-    """
+    """Analitza el text del xat acceptant text normal o amb barra."""
     parts = chat_message.strip().split()
     
-    if not parts or not parts[0].startswith('/'):
+    # 1. Si el missatge està buit, no fem res
+    if not parts:
         return None, None, None
 
-    prefix = parts[0][1:].lower() 
-    command = "help" 
-    agent_name = None
-    param_start_index = -1
+    # 2. Agafem la primera paraula (el prefix)
+    first_word = parts[0].lower()
     
-    # --- Lògica d'Encaminament (Routing) ---
-    
-    if prefix == 'miner':
-        # CAS MÉS COMÚ: /miner start x=10 y=50
-        agent_name = TARGET_MINER_ID # <--- ÚS DE L'ID GLOBAL CONSISTENT
-        command = parts[1].lower() if len(parts) >= 2 else "help"
-        param_start_index = 2
-        
-    elif prefix == 'agent':
-        # CAS GENÈRIC: /agent status o /agent miner start
-        
-        # /agent [command] (p. ex., /agent start)
-        if len(parts) >= 2 and parts[1].lower() in ['start', 'pause', 'stop', 'status', 'help']:
-            agent_name = TARGET_MINER_ID
-            command = parts[1].lower()
-            param_start_index = 2
-        
-        # /agent [target] [command] (p. ex., /agent miner status)
-        elif len(parts) >= 3 and parts[1].lower() == 'miner':
-            agent_name = TARGET_MINER_ID
-            command = parts[2].lower()
-            param_start_index = 3
-        
-        # Si només és /agent
-        else:
-            agent_name = TARGET_MINER_ID
-            command = "help"
-            
+    # 3. Netegem la barra NOMÉS si la porta, però si no la porta també seguim
+    if first_word.startswith('/'):
+        prefix = first_word[1:]
     else:
-        parser_logger.warning(f"Prefix de comanda desconegut: {prefix}")
-        return None, None, None
+        prefix = first_word
 
-
-    # --- Extreure Paràmetres (Clau=Valor) ---
+    agent_name = None
+    command = "help"
     params = {}
-    if param_start_index != -1:
-        for part in parts[param_start_index:]:
-            if '=' in part:
-                key, value = part.split('=', 1)
-                try:
-                    params[key] = int(value)
-                except ValueError:
-                    params[key] = value
 
-    parser_logger.info(f"PARSE EXIT: Agent={agent_name}, Cmd={command}, Params={params}")
+    # 4. Mirem si el prefix és un dels nostres bots
+    if prefix == 'explorer':
+        agent_name = "ExplorerBot-1"
+        command = parts[1].lower() if len(parts) >= 2 else "help"
+    elif prefix == 'miner':
+        agent_name = "MinerBot-1"
+        command = parts[1].lower() if len(parts) >= 2 else "help"
+    elif prefix == 'builder': # <--- AFEGEIX AIXÒ
+        agent_name = "BuilderBot-1"
+        command = parts[1].lower() if len(parts) >= 2 else "help"
+    # 5. Extraiem els paràmetres x=100 z=100 etc.
+    for part in parts[1:]: 
+        if '=' in part:
+            k, v = part.split('=', 1)
+            params[k] = int(v) if v.isdigit() else v
+
     return agent_name, command, params
 
-
-# --- 3. Bucle Asíncron de Lectura del Xat ---
-
 async def chat_listener_loop(mc: Minecraft, bus: MessageBus):
-    """Bucle asíncron per a llegir el xat i processar comandes."""
-    parser_logger.info("Iniciant escolta asíncrona de comandes del xat.")
-    
-    CHECK_INTERVAL = 0.05 
-    
+    """Bucle asíncron que llegeix el xat de Minecraft i publica al Bus[cite: 33, 152]."""
+    logger.info("Iniciant escolta asíncrona...")
     while True:
         try:
-            start_time = time.monotonic()
-            
             posts = mc.events.pollChatPosts() 
-            
             for post in posts:
-                # La comanda s'ha d'interceptar, fins i tot si és 'Unknown command' al MC
+                # AFEGEIX AIXÒ PER VEURE-HO TOT:
+                print(f"DEBUG XAT REBUT: {post.message}") 
+                
                 agent_name, command, params = parse_command(post.message)
-
                 if agent_name and command:
-                    # L'ID de l'agent i el 'target' del bus han de coincidir (MinerBot_A)
                     control_message = {
                         "type": f"command.{command}.v1",
                         "source": "User", 
-                        "target": agent_name, # Aquest és el nom que el Bus utilitzarà
+                        "target": agent_name, 
                         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         "payload": params,
                         "status": "PENDING",
                         "context": {"source_chat": post.message}
                     }
                     await bus.publish(control_message)
-                
-            elapsed_time = time.monotonic() - start_time
-            sleep_time = max(0, CHECK_INTERVAL - elapsed_time)
-            await asyncio.sleep(sleep_time) 
-
+            await asyncio.sleep(0.1) 
         except Exception as e:
-            parser_logger.error(f"Error crític en el listener del xat: {e}")
+            logger.error(f"Error en el listener del xat: {e}")
             break
 
+# --- 3. Descobriment Reflectiu  ---
 
-# --- 4. Funció Principal (main) ---
+def discover_agents():
+    found_classes = {}
+    for _, name, _ in pkgutil.iter_modules(agents.__path__):
+        module = importlib.import_module(f"agents.{name}")
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if (isinstance(attr, type) and issubclass(attr, BaseAgent) and attr is not BaseAgent):
+                found_classes[attr_name] = attr
+                logger.info(f"REFLEXIÓ: '{attr_name}' registrat automàticament.")
+    return found_classes
+
+# --- 4. Main Loop ---
 
 async def main():
-    mc_connection = connect_to_minecraft()
-    if not mc_connection:
-        return
-
-    # Inicialitzar el sistema de comunicació
+    mc = Minecraft.create() 
     bus = MessageBus()
-
-    # Creació i Registre dels Agents
-    miner_id = TARGET_MINER_ID # "MinerBot_A"
-    miner_queue = bus.subscribe(miner_id)
+    agent_classes = discover_agents()
     
-    # L'agent necessita la connexió mcpi per actuar
-    miner_agent = MinerBot(agent_id=miner_id, message_bus=bus, input_queue=miner_queue, mc_connection=mc_connection)
-    
-    # Llista de tasques asíncrones a executar concurrentment
-    tasks = [
-        asyncio.create_task(chat_listener_loop(mc_connection, bus)),
-        asyncio.create_task(miner_agent.run())
-    ]
+    active_agents = []
+    tasks = []
 
-    logger.info("Totes les tasques asíncrones s'estan executant.")
-    await asyncio.gather(*tasks)
+    mapping = {
+        "ExplorerBot": "ExplorerBot-1",
+        "MinerBot": "MinerBot-1",
+        "BuilderBot": "BuilderBot-1"
+    }
+
+    for class_name, agent_id in mapping.items():
+        if class_name in agent_classes:
+            queue = bus.subscribe(agent_id)
+            agent_inst = agent_classes[class_name](
+                agent_id=agent_id, 
+                mc_connection=mc, 
+                message_bus=bus, 
+                input_queue=queue
+            )
+            active_agents.append(agent_inst)
+            tasks.append(asyncio.create_task(agent_inst.run()))
+
+    # Afegim el listener del xat a les tasques asíncrones 
+    tasks.append(asyncio.create_task(chat_listener_loop(mc, bus)))
+
+    logger.info("SISTEMA ACTIU: Escoltant xat i agents corrent.")
+
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        logger.info("Aturant el sistema...")
+    finally:
+        for agent in active_agents:
+            agent.handle_control("stop") 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.warning("Sistema interromput per l'usuari (Ctrl+C). Tancant.")
+    asyncio.run(main())
