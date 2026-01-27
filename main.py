@@ -22,47 +22,37 @@ logger = logging.getLogger("MAIN")
 
 TARGET_MINER_ID = "MinerBot-1"
 
-# --- 2. Parser de Comandes (Lògica de Xat) [cite: 152, 153] ---
+# --- 2. Parser de Comandes (Lògica de Xat)
 
 def parse_command(chat_message: str):
-    """Analitza el text del xat acceptant text normal o amb barra."""
     parts = chat_message.strip().split()
-    
-    # 1. Si el missatge està buit, no fem res
-    if not parts:
-        return None, None, None
+    if not parts: return None, None, None
 
-    # 2. Agafem la primera paraula (el prefix)
     first_word = parts[0].lower()
-    
-    # 3. Netegem la barra NOMÉS si la porta, però si no la porta també seguim
-    if first_word.startswith('/'):
-        prefix = first_word[1:]
-    else:
-        prefix = first_word
+    prefix = first_word[1:] if first_word.startswith('/') else first_word
 
     agent_name = None
     command = "help"
     params = {}
 
-    # 4. Mirem si el prefix és un dels nostres bots
+    # MAPPING DE PREFIXOS A IDS REALS
     if prefix == 'explorer':
         agent_name = "ExplorerBot-1"
-        command = parts[1].lower() if len(parts) >= 2 else "help"
     elif prefix == 'miner':
         agent_name = "MinerBot-1"
-        command = parts[1].lower() if len(parts) >= 2 else "help"
-    elif prefix == 'builder': # <--- AFEGEIX AIXÒ
+    elif prefix == 'builder': # <--- ARA EL BUILDER ÉS RECONEGUT
         agent_name = "BuilderBot-1"
+    
+    if agent_name:
         command = parts[1].lower() if len(parts) >= 2 else "help"
-    # 5. Extraiem els paràmetres x=100 z=100 etc.
+
+    # Extraiem paràmetres x=100 z=100 etc.
     for part in parts[1:]: 
         if '=' in part:
             k, v = part.split('=', 1)
             params[k] = int(v) if v.isdigit() else v
 
     return agent_name, command, params
-
 async def chat_listener_loop(mc: Minecraft, bus: MessageBus):
     """Bucle asíncron que llegeix el xat de Minecraft i publica al Bus[cite: 33, 152]."""
     logger.info("Iniciant escolta asíncrona...")

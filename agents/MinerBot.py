@@ -10,16 +10,16 @@ logger = logging.getLogger("MinerBot")
 class MinerBot(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Registre dinàmic d'estratègies
         self.strategies = self._discover_strategies()
         self.current_strategy = self.strategies.get("VerticalMining")
         self.inventory = {}
         self.target_bom = {}
-        # Afegim coordenades de treball per no dependre del jugador
+        # Coordenades de treball fixes per no dependre de la posició del jugador
         self.mine_x, self.mine_y, self.mine_z = 0, 0, 0
         self.state = "IDLE" 
 
     def _discover_strategies(self):
-        """Escaneja el paquet 'strategies' i instancia les classes trobades."""
         found = {}
         for _, name, _ in pkgutil.iter_modules(strategies.__path__):
             module = importlib.import_module(f"strategies.{name}")
@@ -35,52 +35,58 @@ class MinerBot(BaseAgent):
         m_type = message.get("type", "")
         payload = message.get("payload", {})
 
-        # 1. Control de l'estat
-        if "command.pause" in m_type: self.transition_to("PAUSED")
-        elif "command.resume" in m_type: self.transition_to("RUNNING")
-        elif "command.stop" in m_type: self.transition_to("STOPPED")
+        if "command.stop" in m_type: 
+            self.transition_to("STOPPED")
         
-        # 2. Configuració dinàmica d'estratègia
-        elif "command.set_strategy" in m_type:
-            strat_name = payload.get("strategy")
-            if strat_name in self.strategies:
-                self.current_strategy = self.strategies[strat_name]
-                logger.info(f"MinerBot: Estratègia canviada a {strat_name}")
-
-        # 3. Cooperació: Rebre requeriments del BuilderBot
+        # Comando: Iniciar minado des de posició actual
+        elif "command.start" in m_type:
+            self.target_bom = {"stone": 64}
+            logger.info(f"MinerBot: Iniciant minat des de la posició actual.")
+            self.transition_to("RUNNING")
+        
+        # Cooperació: Rebre requeriments del BuilderBot
         elif "materials.requirements" in m_type:
             self.target_bom = payload
-            # IMPORTANT: Guardem on hem de minar (si no ve al missatge, usem una posició segura)
             self.mine_x = payload.get("x", 120)
             self.mine_y = payload.get("y", 60)
             self.mine_z = payload.get("z", 120)
-            
-            logger.info(f"MinerBot: Rebuts requeriments i coordenades. Iniciant minat.")
+            logger.info(f"MinerBot: Rebut objectiu a ({self.mine_x}, {self.mine_z}).")
             self.transition_to("RUNNING")
 
     def decide(self):
-        """Decideix si l'objectiu s'ha complert."""
+        """IMPLEMENTACIÓ OBLIGATÒRIA."""
         if self.state == "RUNNING" and not self.target_bom:
+            logger.info("MinerBot: No hi ha més requeriments. Tornant a IDLE.")
             self.transition_to("IDLE")
 
+    # ERROR CORREGIT: El mètode 'act' ara està DINS de la classe (indentat)
     async def act(self):
-        """Executa l'acció física delegant en l'estratègia."""
         if self.state == "RUNNING" and self.current_strategy:
-            # IMPORTANT: Passem l'agent sencer per a que l'estratègia 
-            # pugui llegir self.mine_x, self.mine_y, self.mine_z
+            # Executa el minat (omple bot.inventory["stone"] amb una llista)
             result = self.current_strategy.execute(self.mc, self)
             
-            # Cada vegada que l'estratègia pica un bloc, hauria d'actualitzar self.inventory
-            # Enviem l'estat actual de l'inventari al BuilderBot-1
-            await self.send_message(
-                target="BuilderBot-1",
-                msg_type="inventory.v1",
-                payload=self.inventory
-            )
+            # Objectiu i recompte real
+            pedra_objectiu = self.target_bom.get("stone", 30)
+            inventari_pedra = self.inventory.get("stone", [])
+            pedra_actual = len(inventari_pedra) if isinstance(inventari_pedra, list) else 0
             
-            # Si l'estratègia ha acabat la seva feina
-            if result == "SUCCESS":
-                logger.info("MinerBot: Objectiu de minat assolit.")
-                # Opcional: self.transition_to("IDLE") si vols que s'aturi al acabar la BOM
+            logger.info(f"MinerBot: Estat de minat {pedra_actual}/{pedra_objectiu}")
             
+            if pedra_actual >= pedra_objectiu:
+                logger.info("MinerBot: Objectiu assolit. Notificant BuilderBot...")
+                await self.send_message(
+                    target="BuilderBot-1",
+                    msg_type="mining.complete.v1",
+                    payload={"stone": pedra_actual}
+                )
+                self.target_bom = {}
+                self.transition_to("IDLE")
+            else:
+                # Enviem l'inventari actualitzat mentre minem
+                await self.send_message(
+                    target="BuilderBot-1",
+                    msg_type="inventory.v1",
+                    payload=self.inventory
+                )
+                
             await asyncio.sleep(0.5)

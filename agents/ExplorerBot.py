@@ -13,6 +13,7 @@ class ExplorerBot(BaseAgent):
         self.target_z = 0
         self.scan_range = 10
 
+    
     async def perceive(self, message):
         """
         Rep els missatges de la cua asíncrona.

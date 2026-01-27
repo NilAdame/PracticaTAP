@@ -2,76 +2,111 @@ from agents.BaseAgent import BaseAgent
 import asyncio
 import logging
 
-# Configurem el logger per a aquest agent
 logger = logging.getLogger("BuilderBot")
 
 class BuilderBot(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.required_materials = {}
+        self.state = "IDLE"
         self.current_inventory = {}
-        self.build_plan = []
-        # L'estat inicial ha de ser IDLE per evitar que estigui STOPPED
-        self.state = "IDLE" 
+        self.required_materials = {}
+        self.selected_blueprint = "base_pedra"
+        self.build_x, self.build_y, self.build_z = 0, 70, 0
+        
+        # Plànol de prova
+        self.blueprints = {
+            "base_pedra": [
+                [0, 0, 0, 1], [1, 0, 0, 1], [2, 0, 0, 1],
+                [0, 0, 1, 1], [1, 0, 1, 1], [2, 0, 1, 1]
+            ],
+            "creu": [
+                [0, 0, 0, 1], 
+                [0, 1, 0, 1], 
+                [0, 2, 0, 1],
+                # Braços (a l'alçada del segon bloc, y=1)
+                [-1, 1, 0, 1], 
+                [1, 1, 0, 1],
+                [0, 1, -1, 1],
+                [0, 1, 1, 1]
+            ]
+            
+        }
 
     async def perceive(self, message):
-        """Procesa missatges entrants del Bus."""
+        """Processa missatges del bus."""
         msg_type = message.get("type")
-        payload = message.get("payload", {})
-        
-        if msg_type == "map.v1":
-            # Reben dades de l'ExplorerBot per decidir on i què construir
-            terrain_data = payload.get("data", [])
-            logger.info(f"{self.agent_id} | Mapa rebut. Generant llista de materials...")
-            await self.generate_bom(terrain_data)
+        payload = message.get("payload", {}) 
+
+        if msg_type == "command.start.v1":
+            # MILLORA 2: Comprovem si l'usuari ha especificat l'estructura
+            selected = payload.get("structure")
             
-        elif msg_type in ["inventory.v1", "inventory.update.v1"]:
-            # Actualització de materials que envia el MinerBot
+            if not selected:
+                self.mc.postToChat(" Has d'especificar: structure=creu o structure=base_pedra")
+                return # Atura l'execució si no hi ha tria
+
+            self.selected_blueprint = selected
+            
+            # Verificació de seguretat
+            if self.selected_blueprint not in self.blueprints:
+                self.mc.postToChat(f" Error: No conec l'estructura '{self.selected_blueprint}'")
+                return
+
+            # MILLORA 1: Calcular la posició "davant" segons la direcció del jugador
+            pos = self.mc.player.getTilePos()
+            direction = self.mc.player.getDirection()
+            
+            # Multipliquem la direcció per 3 per posar-ho una mica allunyat
+            # Fem servir round() per convertir el vector de direcció a enters de quadrícula
+            self.build_x = int(pos.x + (direction.x * 4))
+            self.build_y = pos.y
+            self.build_z = int(pos.z + (direction.z * 4))
+            
+            self.mc.postToChat(f" Triat planol: {self.selected_blueprint}")
+            await self.generate_bom(None)
+
+        elif msg_type == "map.v1":
+            # Aquí mantenim un valor per defecte per si ve de l'Explorer
+            center = payload.get("center", {})
+            self.selected_blueprint = payload.get("structure", "base_pedra")
+            self.build_x, self.build_y, self.build_z = center.get("x"), center.get("y"), center.get("z")
+            await self.generate_bom(None)
+            
+        elif msg_type in ["inventory.v1", "mining.complete.v1"]:
             self.current_inventory = payload
-            logger.info(f"{self.agent_id} | Inventari actualitzat: {self.current_inventory}")
-
-    async def generate_bom(self, terrain_data):
-        """Calcula els materials (Bill of Materials) i els demana al Miner."""
-        # Simplifiquem a només pedra per garantir que el ready sigui True amb el que tens
-        self.required_materials = {"stone": 20} 
-        
-        # Passem a WAITING per esperar que el Miner reculli la pedra
-        self.transition_to("WAITING") 
-        
-        # Enviar requeriments al MinerBot-1 (ID correcte del main.py)
-        # ÉS CRÍTIC usar 'await' aquí
-        await self.send_message("MinerBot-1", "materials.requirements.v1", self.required_materials)
-
     def decide(self):
-        """Gestiona la transició de WAITING a RUNNING."""
+        """Mètode obligatori per BaseAgent."""
         if self.state == "WAITING":
-            # Simplificació: Només comprovem la pedra per desbloquejar el bot
-            pedra_actual = self.current_inventory.get("stone", 0)
-            pedra_necessaria = self.required_materials.get("stone", 20)
+            # Comptem la pedra rebuda (pot ser llista o número)
+            data = self.current_inventory.get("stone", 0)
+            pedra_actual = len(data) if isinstance(data, list) else data
+            pedra_necessaria = self.required_materials.get("stone", 0)
             
-            if pedra_actual >= pedra_necessaria:
-                print(f"DEBUG: BuilderBot té prou pedra ({pedra_actual}). Construint!")
+            if pedra_necessaria > 0 and pedra_actual >= pedra_necessaria:
+                logger.info("Materials llestos!")
                 self.transition_to("RUNNING")
 
     async def act(self):
-        """Construeix a les coordenades de l'ordre, NO a les del jugador."""
+        """Mètode ASÍNCRON obligatori."""
         if self.state == "RUNNING":
-            # IMPORTANT: Ara usem les coordenades guardades del map.v1 (build_x, build_y, build_z)
-            # Si no en tens, usa les que hem rebut al perceive
-            base_x = getattr(self, 'build_x', 100) 
-            base_y = getattr(self, 'build_y', 70)
-            base_z = getattr(self, 'build_z', 100)
-
-            print(f"BuilderBot: Construint base a {base_x}, {base_y}, {base_z}")
+            plan = self.blueprints.get(self.selected_blueprint, [])
+            for b in plan:
+                # Col·loquem el bloc
+                self.mc.setBlock(self.build_x + b[0], self.build_y + b[1], self.build_z + b[2], b[3])
+                await asyncio.sleep(0.1)
             
-            for y_offset in range(2): 
-                for x_offset in range(5):
-                    for z_offset in range(5):
-                        # Block ID 1 = Pedra
-                        self.mc.setBlock(base_x + x_offset, 
-                                        base_y + y_offset, 
-                                        base_z + z_offset, 1)
-                await asyncio.sleep(0.1) 
-
-            await self.send_message("broadcast", "build.v1", {"status": "COMPLETED"})
+            self.mc.postToChat("Construcció acabada!")
             self.transition_to("IDLE")
+
+    async def generate_bom(self, _):
+        """Calcula materials i demana al Miner."""
+        plan = self.blueprints.get(self.selected_blueprint, [])
+        pedra_req = len([b for b in plan if b[3] == 1])
+        self.required_materials = {"stone": pedra_req}
+        
+        payload_miner = {
+            "stone": pedra_req,
+            "x": self.build_x, "y": self.build_y, "z": self.build_z
+        }
+        self.transition_to("WAITING")
+        await self.send_message("MinerBot-1", "materials.requirements.v1", payload_miner)

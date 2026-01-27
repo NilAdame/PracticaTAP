@@ -1,8 +1,89 @@
 {
     "agent_id": "MinerBot-1",
-    "state": "STOPPED",
+    "state": "IDLE",
     "inventory": {
-        "stone": 59
+        "stone": [
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 1
+            },
+            {
+                "id": 1,
+                "data": 1
+            },
+            {
+                "id": 1,
+                "data": 1
+            },
+            {
+                "id": 1,
+                "data": 1
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            },
+            {
+                "id": 1,
+                "data": 0
+            }
+        ]
     },
-    "timestamp": "2026-01-25T21:33:57.268819Z"
+    "timestamp": "2026-01-27T14:44:26.082634Z"
 }

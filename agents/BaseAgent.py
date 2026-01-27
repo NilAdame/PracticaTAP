@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import asyncio
+from mcpi.block import Block  # Import Block per reconstruir-lo
 from datetime import datetime
 
 # Configuració de logs obligatòria [cite: 214]
@@ -19,7 +20,7 @@ class BaseAgent(abc.ABC):
         self.state = "IDLE"  # Estat inicial [cite: 107]
         self.inventory = {}
         
-        # Intentem carregar un estat previ en iniciar [cite: 124]
+        # Intentem carregar un estat previ en iniciar 
         self.load_checkpoint()
 
     def transition_to(self, next_state):
@@ -37,17 +38,17 @@ class BaseAgent(abc.ABC):
 
     @abc.abstractmethod
     async def perceive(self):
-        """Cicle de percepció: llegir l'entorn o missatges [cite: 30]"""
+        """Cicle de percepció: llegir l'entorn o missatges """
         pass
 
     @abc.abstractmethod
     def decide(self):
-        """Cicle de decisió: processar dades i triar acció [cite: 30]"""
+        """Cicle de decisió: processar dades i triar acció """
         pass
 
     @abc.abstractmethod
     async def act(self):
-        """Cicle d'acció: execució física en Minecraft [cite: 30]"""
+        """Cicle d'acció: execució física en Minecraft """
         pass
 
     async def run(self):
@@ -63,15 +64,16 @@ class BaseAgent(abc.ABC):
             except asyncio.TimeoutError:
                 pass
 
-            # 2. Només si estem actius, executem la lògica física
-            if self.state == "RUNNING":
+            # 2. Executem decide en els estats RUNNING i WAITING
+            if self.state in ["RUNNING", "WAITING"]:
                 self.decide()
+                
+            # 3. Només executem act si estem en RUNNING
+            if self.state == "RUNNING":
                 await self.act()
                 
             await asyncio.sleep(0.1)
-    
     async def send_message(self, target, msg_type, payload, status="SUCCESS", context=None):
-        """Envia missatges seguint l'esquema JSON estàndard [cite: 35, 37]"""
         message = {
             "type": msg_type,
             "source": self.agent_id,
@@ -95,10 +97,22 @@ class BaseAgent(abc.ABC):
 
     def save_checkpoint(self):
         """Guarda l'estat actual de l'agent en un fitxer JSON."""
+        # Convertim els Block objects a diccionaris per poder guardar-los
+        inventory_serializable = {}
+        for key, value in self.inventory.items():
+            if isinstance(value, list):
+                # Si és una llista de Blocks, convertim cada un
+                inventory_serializable[key] = [
+                    {"id": block.id, "data": block.data} if hasattr(block, 'id') else block
+                    for block in value
+                ]
+            else:
+                inventory_serializable[key] = value
+        
         checkpoint_data = {
             "agent_id": self.agent_id,
             "state": self.state,
-            "inventory": self.inventory,
+            "inventory": inventory_serializable,
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
         os.makedirs('checkpoints', exist_ok=True)
@@ -108,11 +122,26 @@ class BaseAgent(abc.ABC):
         logger.debug(f"Checkpoint guardat: {filename}")
 
     def load_checkpoint(self):
+        
         path = f"checkpoints/{self.agent_id}.json"
         if os.path.exists(path):
-            with open(path, 'r') as f:
-                data = json.load(f)
-                # Forcem l'estat IDLE per evitar que el bot estigui "mort" d'entrada
-                self.state = "IDLE" 
-                self.inventory = data.get("inventory", {})
-                logger.info(f"Estat restaurat (IDLE) per a {self.agent_id}")
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                    # Forcem l'estat IDLE per evitar que el bot estigui "mort" d'entrada
+                    self.state = "IDLE" 
+                    
+                    # Reconvertim els diccionaris a Block objects
+                    inventory = data.get("inventory", {})
+                    for key, value in inventory.items():
+                        if isinstance(value, list) and value and isinstance(value[0], dict):
+                            # Reconstruïm els Block objects
+                            self.inventory[key] = [Block(b["id"], b["data"]) for b in value]
+                        else:
+                            self.inventory[key] = value
+                    
+                    logger.info(f"Estat restaurat (IDLE) per a {self.agent_id}")
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                logger.warning(f"Checkpoint corrupte o invàlid per a {self.agent_id}: {e}")
+                logger.info(f"Començ amb nou estat per a {self.agent_id}")
+                # Si hi ha error, simplement ignorem el checkpoint i comencem de nou
