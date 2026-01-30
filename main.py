@@ -40,7 +40,7 @@ def parse_command(chat_message: str):
         agent_name = "ExplorerBot-1"
     elif prefix == 'miner':
         agent_name = "MinerBot-1"
-    elif prefix == 'builder': # <--- ARA EL BUILDER ÉS RECONEGUT
+    elif prefix == 'builder': 
         agent_name = "BuilderBot-1"
     
     if agent_name:

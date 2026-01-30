@@ -33,47 +33,48 @@ class BuilderBot(BaseAgent):
         }
 
     async def perceive(self, message):
-        """Processa missatges del bus."""
         msg_type = message.get("type")
-        payload = message.get("payload", {}) 
+        payload = message.get("payload", {})
 
         if msg_type == "command.start.v1":
-            # MILLORA 2: Comprovem si l'usuari ha especificat l'estructura
             selected = payload.get("structure")
-            
             if not selected:
-                self.mc.postToChat(" Has d'especificar: structure=creu o structure=base_pedra")
-                return # Atura l'execució si no hi ha tria
+                self.mc.postToChat("Indica estructura: structure=creu o base_pedra")
+                return
 
             self.selected_blueprint = selected
             
-            # Verificació de seguretat
-            if self.selected_blueprint not in self.blueprints:
-                self.mc.postToChat(f" Error: No conec l'estructura '{self.selected_blueprint}'")
-                return
-
-            # MILLORA 1: Calcular la posició "davant" segons la direcció del jugador
             pos = self.mc.player.getTilePos()
             direction = self.mc.player.getDirection()
-            
-            # Multipliquem la direcció per 3 per posar-ho una mica allunyat
-            # Fem servir round() per convertir el vector de direcció a enters de quadrícula
             self.build_x = int(pos.x + (direction.x * 4))
             self.build_y = pos.y
             self.build_z = int(pos.z + (direction.z * 4))
-            
-            self.mc.postToChat(f" Triat planol: {self.selected_blueprint}")
-            await self.generate_bom(None)
 
-        elif msg_type == "map.v1":
-            # Aquí mantenim un valor per defecte per si ve de l'Explorer
-            center = payload.get("center", {})
-            self.selected_blueprint = payload.get("structure", "base_pedra")
-            self.build_x, self.build_y, self.build_z = center.get("x"), center.get("y"), center.get("z")
-            await self.generate_bom(None)
+            self.mc.postToChat("Explorer, es plano el terreno?")
+            self.transition_to("VALIDATING")
             
+            await self.send_message("ExplorerBot-1", "command.start.v1", {
+                "x": self.build_x, 
+                "y": self.build_y, 
+                "z": self.build_z,
+                "range": 3
+            })
+
+        elif msg_type == "map.v1" and self.state == "VALIDATING":
+            terrain_data = payload.get("data", [])
+            # Validem que tots els blocs estiguin a la mateixa altura
+            es_plano = all(tile['y'] == self.build_y for tile in terrain_data)
+
+            if es_plano:
+                self.mc.postToChat("Terreno plano. Procediendo con materiales...")
+                await self.generate_bom(None)
+            else:
+                self.mc.postToChat("Error! El terreno no es plano. Busca otro sitio.")
+                self.transition_to("IDLE")
+        # Si no guardem l'inventari, el mètode 'decide' mai s'activarà
         elif msg_type in ["inventory.v1", "mining.complete.v1"]:
-            self.current_inventory = payload
+            self.current_inventory = payload # Ara 'decide' ja podrà veure els materials
+    
     def decide(self):
         """Mètode obligatori per BaseAgent."""
         if self.state == "WAITING":
